@@ -6,7 +6,15 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// ─── CORS CONFIGURATION FIX ───
+// This explicitly allows your production Netlify frontend to securely mutate database states
+app.use(cors({
+  origin: 'https://tipsytrip.netlify.app',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
+
 app.use(express.json());
 
 mongoose.connect(process.env.MONGO_URI)
@@ -23,7 +31,7 @@ const expenseSchema = new mongoose.Schema({
 
 const Expense = mongoose.model('Expense', expenseSchema);
 
-// ─── Helper: normalize a name so "Niladri ", "niladri", "NILADRI" all match ───
+// Helper: normalize a name so variations match cleanly
 const norm = (name) => name.trim().toLowerCase();
 
 // GET all expenses
@@ -36,7 +44,7 @@ app.get('/api/expenses', async (req, res) => {
   }
 });
 
-// POST new expense  — normalize names before saving
+// POST new expense
 app.post('/api/expenses', async (req, res) => {
   try {
     let { description, amount, paidBy, splitAmong } = req.body;
@@ -45,7 +53,6 @@ app.post('/api/expenses', async (req, res) => {
       return res.status(400).json({ error: "Missing fields or no members selected for split" });
     }
 
-    // FIX: trim & normalize case on save so DB is always clean
     paidBy      = paidBy.trim();
     splitAmong  = splitAmong.map(m => m.trim()).filter(Boolean);
 
@@ -73,22 +80,19 @@ app.delete('/api/expenses/clear', async (req, res) => {
   }
 });
 
-// GET settlement  — core fix is here
+// GET settlement matrix logic
 app.get('/api/settlement', async (req, res) => {
   try {
     const expenses = await Expense.find();
 
-    // Parse members sent from frontend and normalize them
     const queryMembers = req.query.members
       ? JSON.parse(req.query.members).map(m => m.trim()).filter(Boolean)
       : [];
 
-    // FIX: build a canonical name map  norm(name) → display name
-    // This ensures "Niladri", "niladri ", "NILADRI" all resolve to the same key
-    const canonicalMap = {}; // norm → original display name
+    const canonicalMap = {}; 
 
     queryMembers.forEach(m => {
-      canonicalMap[norm(m)] = m;  // frontend names are source of truth for display
+      canonicalMap[norm(m)] = m;  
     });
 
     expenses.forEach(exp => {
@@ -101,15 +105,15 @@ app.get('/api/settlement', async (req, res) => {
       });
     });
 
-    const currentMembers = Object.keys(canonicalMap); // normalized keys
+    const currentMembers = Object.keys(canonicalMap); 
 
     if (expenses.length === 0 || currentMembers.length === 0) {
       return res.json({ totalTripSpent: 0, individualPaid: {}, transactions: [] });
     }
 
     let totalTripSpent = 0;
-    let balances      = {};  // keyed by norm(name)
-    let individualPaid = {}; // keyed by norm(name)
+    let balances       = {};  
+    let individualPaid = {}; 
 
     currentMembers.forEach(k => {
       balances[k]       = 0;
@@ -122,7 +126,7 @@ app.get('/api/settlement', async (req, res) => {
       const payerKey = norm(exp.paidBy);
 
       if (balances[payerKey] !== undefined) {
-        balances[payerKey]       += exp.amount;  // credit payer
+        balances[payerKey]       += exp.amount;  
         individualPaid[payerKey] += exp.amount;
       }
 
@@ -130,19 +134,17 @@ app.get('/api/settlement', async (req, res) => {
         ? exp.splitAmong.map(norm)
         : currentMembers;
 
-      // FIX: filter to only members that actually exist in balances
       const validSplit = splitList.filter(k => balances[k] !== undefined);
 
-      if (validSplit.length === 0) return; // safety guard
+      if (validSplit.length === 0) return; 
 
       const costPerPerson = exp.amount / validSplit.length;
 
       validSplit.forEach(memberKey => {
-        balances[memberKey] -= costPerPerson; // debit each member their share
+        balances[memberKey] -= costPerPerson; 
       });
     });
 
-    // Build creditors / debtors using normalized keys, display with canonical names
     let creditors = [];
     let debtors   = [];
 
@@ -158,7 +160,6 @@ app.get('/api/settlement', async (req, res) => {
     creditors.sort((a, b) => b.amount - a.amount);
     debtors.sort((a, b) => b.amount - a.amount);
 
-    // Greedy transaction minimization
     let transactions = [];
     let i = 0, j = 0;
 
@@ -180,7 +181,6 @@ app.get('/api/settlement', async (req, res) => {
       if (creditor.amount < 0.01) j++;
     }
 
-    // Build individualPaid with display names for frontend
     const individualPaidDisplay = {};
     for (let key in individualPaid) {
       individualPaidDisplay[canonicalMap[key]] = Math.round(individualPaid[key] * 100) / 100;
