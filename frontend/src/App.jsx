@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-const API_BASE_URL = "http://localhost:5000";
+const API_BASE_URL = "https://trip-splitter.onrender.com";
 
 export default function App() {
   const [expenses, setExpenses] = useState([]);
